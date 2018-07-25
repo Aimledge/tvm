@@ -110,19 +110,22 @@ def decl_conv2d(data, kernel, stride, padding, layout='NCHW', out_dtype='float32
     assert layout == 'NCHW', "only support NCHW convolution on mali"
     assert data.shape[0].value == 1, "only support batch size=1 convolution on mali"
     assert data.dtype == kernel.dtype, "Do not support inputs with different data types now."
-
     out_dtype = data.dtype
     HPAD, WPAD, _, _ = get_pad_tuple(padding, kernel)
     kernel_shape = util.get_const_tuple(kernel.shape)
+    data_shape = util.get_const_tuple(data.shape)
+
+
     if isinstance(stride, (tuple, list)):
         HSTR, WSTR = stride
     else:
         HSTR, WSTR = stride, stride
+    
 
     if (kernel_shape[2:4] == (3, 3) and (HPAD, WPAD) == (1, 1) and kernel_shape[0] >= 64 and
             (HSTR, WSTR) == (1, 1)):
-        return _decl_winograd(data, kernel, stride, padding, layout, out_dtype)
-    elif kernel_shape[2:4] == (1, 1):
+        return _decl_winograd(data, kernel, stride, padding, layout, out_dtype)    
+    elif kernel_shape[2:4] == (1, 1) and data.shape[3].value != 19:
         return _decl_im2col(data, kernel, stride, padding, layout, out_dtype)
     else:
         return _decl_spatialpack(data, kernel, stride, padding, layout, out_dtype)
@@ -192,9 +195,10 @@ def _decl_spatialpack(data, kernel, stride, padding, layout, out_dtype):
 
     # set tunable parameters (tile factor, ...)
     tune_config = getattr(tvm.target.current_target(), "tune_config", None)
+
     if tune_config is None:
         VH = 1
-        VW, VC = 4, 4
+        VW, VC = 4, 8
         # correct tile factor
         if OW % VW != 0:
             if OW == 14:
@@ -210,7 +214,18 @@ def _decl_spatialpack(data, kernel, stride, padding, layout, out_dtype):
     if data.dtype == 'float16':
         VC *= 2
 
-    assert CO % VC == 0
+    # From https://github.com/dmlc/nnvm/issues/490
+    if OW % VW != 0:
+        while OW % VW != 0:
+            VW //= 2
+    if OH % VH != 0:
+        while OH % VH != 0:
+            VH //= 2
+    if CO % VC != 0:
+        while CO % VC != 0:
+            VC //= 2
+
+    assert CO % VC == 0, "CO: %d  VC : %d" % (CO, VC)
     assert OH % VH == 0, "OH: %d  VH : %d" % (OH, VH)
     assert OW % VW == 0, "OW: %d  VW : %d" % (OW, VW)
 
@@ -257,7 +272,7 @@ def _schedule_spatialpack_conv2d(s, op):
     # set tunable parameters (tile factor, ...)
     tune_config = getattr(tvm.target.current_target(), "tune_config", None)
     if tune_config is None:
-        num_thread = 8
+        num_thread = 4
 
         out_channel = util.get_const_int(kernel.shape[0])
         in_channel = util.get_const_int(kernel.shape[1])
@@ -288,6 +303,7 @@ def _schedule_spatialpack_conv2d(s, op):
 
     if data.dtype == 'float16' and (util.get_const_int(conv.shape[1]) == 4 or output_height == 28):
         num_thread //= 2
+    
 
     # schedule dilation
     if isinstance(kernel.op, tvm.tensor.ComputeOp) and "dilate" in kernel.op.tag:
@@ -310,7 +326,7 @@ def _schedule_spatialpack_conv2d(s, op):
     s[kernel_vec].unroll(kh)
     s[kernel_vec].unroll(kw)
     s[kernel_vec].vectorize(vc)
-
+    
     # schedule convolution
     _, c, h, w, vh, vw, vc = s[conv].op.axis
     kc, kh, kw = s[conv].op.reduce_axis
