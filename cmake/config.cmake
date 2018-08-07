@@ -43,7 +43,7 @@ set(USE_ROCM OFF)
 set(USE_SDACCEL OFF)
 
 # Whether enable OpenCL runtime
-set(USE_OPENCL OFF)
+set(USE_OPENCL ON)
 
 # Whether enable Metal runtime
 set(USE_METAL OFF)
@@ -75,7 +75,7 @@ set(USE_GRAPH_RUNTIME_DEBUG OFF)
 # - ON: enable llvm with cmake's find search
 # - OFF: disbale llvm
 # - /path/to/llvm-config: enable specific LLVM when multiple llvm-dev is available.
-set(USE_LLVM OFF)
+set(USE_LLVM ON)
 
 #---------------------------------------------
 # Contrib libraries
